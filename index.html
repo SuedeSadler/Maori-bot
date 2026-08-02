@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>EyeMech Face Tracker (Web)</title>
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    background: #111;
+    color: #eee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  #status { margin-bottom: 16px; color: #9ad; }
+  .video-wrap { position: relative; }
+  video, canvas {
+    width: 480px;
+    height: 360px;
+    border-radius: 8px;
+  }
+  canvas { position: absolute; top: 0; left: 0; }
+  video { transform: scaleX(-1); }
+  button {
+    margin-top: 16px;
+    padding: 10px 20px;
+    font-size: 15px;
+    border-radius: 6px;
+    border: none;
+    background: #3b82f6;
+    color: white;
+    cursor: pointer;
+  }
+  button:disabled { background: #555; cursor: not-allowed; }
+  #coords { margin-top: 12px; font-family: monospace; color: #8f8; }
+  .warn { color: #f88; margin-top: 8px; font-size: 13px; text-align: center; max-width: 480px; }
+</style>
+</head>
+<body>
+
+<h1>EyeMech Face Tracker (Web)</h1>
+<div id="status">Loading face detection model...</div>
+
+<div class="video-wrap">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+</div>
+
+<div id="coords">x: -- , y: --</div>
+
+<button id="connectBtn" disabled>Connect to Pico (Web Serial)</button>
+<div class="warn">Requires Chrome or Edge. The Pico must not be connected to Thonny at the same time.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
+<script>
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const coordsEl = document.getElementById('coords');
+const connectBtn = document.getElementById('connectBtn');
+
+let model = null;
+let port = null;
+let writer = null;
+let lastFaceTime = 0;
+const FACE_TIMEOUT_MS = 800;
+
+async function setupCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 } });
+  video.srcObject = stream;
+  return new Promise(resolve => {
+    video.onloadedmetadata = () => {
+      overlay.width = video.videoWidth;
+      overlay.height = video.videoHeight;
+      resolve();
+    };
+  });
+}
+
+async function connectSerial() {
+  if (!('serial' in navigator)) {
+    statusEl.textContent = 'Web Serial API not supported. Use Chrome or Edge.';
+    return;
+  }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    writer = port.writable.getWriter();
+    statusEl.textContent = 'Connected to Pico. Tracking active.';
+    connectBtn.textContent = 'Connected';
+    connectBtn.disabled = true;
+  } catch (err) {
+    statusEl.textContent = 'Serial connection failed: ' + err.message;
+  }
+}
+
+async function sendCoords(normX, normY) {
+  if (!writer) return;
+  const msg = `${normX.toFixed(3)},${normY.toFixed(3)}\n`;
+  try {
+    await writer.write(new TextEncoder().encode(msg));
+  } catch (err) {
+    console.error('Serial write failed:', err);
+  }
+}
+
+async function detectLoop() {
+  const predictions = await model.estimateFaces(video, false);
+
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+  if (predictions.length > 0) {
+    // largest face
+    let best = predictions[0];
+    let bestArea = 0;
+    for (const p of predictions) {
+      const w = p.bottomRight[0] - p.topLeft[0];
+      const h = p.bottomRight[1] - p.topLeft[1];
+      const area = w * h;
+      if (area > bestArea) { bestArea = area; best = p; }
+    }
+
+    const x1 = best.topLeft[0], y1 = best.topLeft[1];
+    const x2 = best.bottomRight[0], y2 = best.bottomRight[1];
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+
+    const w = overlay.width, h = overlay.height;
+
+    // mirror X (video is displayed mirrored via CSS, so flip detection to match)
+    const normX = -((cx - w / 2) / (w / 2));
+    // invert Y so "face lower in frame" moves eyes down
+    const normY = -((cy - h / 2) / (h / 2));
+
+    const clampedX = Math.max(-1, Math.min(1, normX));
+    const clampedY = Math.max(-1, Math.min(1, normY));
+
+    coordsEl.textContent = `x: ${clampedX.toFixed(2)} , y: ${clampedY.toFixed(2)}`;
+
+    // draw box (mirrored to match displayed video)
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(w - x2, y1, x2 - x1, y2 - y1);
+
+    sendCoords(clampedX, clampedY);
+    lastFaceTime = performance.now();
+  } else {
+    if (performance.now() - lastFaceTime > FACE_TIMEOUT_MS) {
+      coordsEl.textContent = 'x: -- , y: --  (no face)';
+    }
+  }
+
+  requestAnimationFrame(detectLoop);
+}
+
+async function init() {
+  await setupCamera();
+  model = await blazeface.load();
+  statusEl.textContent = 'Model loaded. Click "Connect to Pico" to begin.';
+  connectBtn.disabled = false;
+  detectLoop();
+}
+
+connectBtn.addEventListener('click', connectSerial);
+
+init().catch(err => {
+  statusEl.textContent = 'Error: ' + err.message;
+});
+</script>
+
+</body>
+</html>
