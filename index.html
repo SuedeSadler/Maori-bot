@@ -139,16 +139,17 @@ let micStreamRef = null;
 const FACE_TIMEOUT_MS = 800;
 
 async function setupMedia() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { width: 480, height: 360 },
-    audio: true
+  const videoStream = await navigator.mediaDevices.getUserMedia({
+    video: { width: 480, height: 360 }
   });
-  video.srcObject = stream;
+  video.srcObject = videoStream;
 
-  const audioTracks = stream.getAudioTracks();
-  if (audioTracks.length > 0) {
-    micStreamRef = new MediaStream(audioTracks);
+  try {
+    const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micStreamRef = audioStream;
     setupAudioAnalyser(micStreamRef);
+  } catch (audioErr) {
+    console.warn('Microphone access failed, continuing without it:', audioErr);
   }
 
   return new Promise(resolve => {
