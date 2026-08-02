@@ -82,7 +82,7 @@
   .card-body { padding: 14px; }
 
   #asciiVideoPre {
-    width: 100%; aspect-ratio: 90 / 55;
+    width: 100%; height: auto;
     font-size: 5px; line-height: 5px; letter-spacing: -1px;
     white-space: pre; overflow: hidden; color: var(--live); background: #000;
     font-family: monospace; border-radius: 6px;
@@ -298,7 +298,11 @@ async function setupMedia() {
 }
 
 const sampleCanvas = document.createElement('canvas');
-const SAMPLE_W = 90, SAMPLE_H = 55;
+// Camera captures at 4:3 (480x360). Monospace characters are roughly
+// 0.6x as wide as they are tall, so the sample grid is deliberately
+// "pre-squashed" vertically to compensate — otherwise the text render
+// stretches the image taller than the source actually is.
+const SAMPLE_W = 90, SAMPLE_H = 40;
 sampleCanvas.width = SAMPLE_W;
 sampleCanvas.height = SAMPLE_H;
 const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
