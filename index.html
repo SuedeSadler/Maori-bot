@@ -64,7 +64,7 @@
     font-size: 11px; color: #7a6aa8; user-select: none;
   }
   #mouthHandle:active { cursor: grabbing; }
-  #mouthContainer { width: 100%; height: calc(100% - 22px); overflow: hidden; }
+  #mouthContainer { width: 100%; height: calc(100% - 48px); overflow: hidden; }
 </style>
 </head>
 <body>
@@ -85,6 +85,15 @@
 
 <div id="mouthPanel">
   <div id="mouthHandle">mouth — drag to move, corner to resize</div>
+  <select id="mouthFormSelect" style="width:100%; background:#140f1c; color:#b9a3f5; border:none; border-bottom:1px solid #3a2d5c; padding:4px 8px; font-family:monospace; font-size:11px;">
+    <option value="mouth">mouth (opens when talking)</option>
+    <option value="water">water box (rises when talking)</option>
+    <option value="orb">orb</option>
+    <option value="blob">blob</option>
+    <option value="knot">knot</option>
+    <option value="ring">ring</option>
+    <option value="crystal">crystal</option>
+  </select>
   <div id="mouthContainer"></div>
 </div>
 
@@ -284,10 +293,66 @@ mLight2.position.set(-150, -100, -100);
 mouthScene.add(mLight2);
 
 const mouthMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.5 });
-const mouthGeometry = new THREE.TorusGeometry(60, 15, 20, 60);
-mouthGeometry.computeVertexNormals();
-const mouthMesh = new THREE.Mesh(mouthGeometry, mouthMaterial);
-mouthScene.add(mouthMesh);
+let mouthMesh = null;
+let mouthGeometry = null;
+let mouthBasePositions = null;
+let currentMouthForm = 'mouth';
+
+const mouthBoxHelper = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(140, 120, 140)),
+  new THREE.LineBasicMaterial({ color: 0x8866ff })
+);
+mouthBoxHelper.visible = false;
+mouthScene.add(mouthBoxHelper);
+
+function makeMouthGeometry(type) {
+  if (type === 'orb') return new THREE.IcosahedronGeometry(75, 2);
+  if (type === 'blob') return new THREE.IcosahedronGeometry(75, 4);
+  if (type === 'knot') return new THREE.TorusKnotGeometry(48, 16, 120, 16);
+  if (type === 'ring') return new THREE.TorusGeometry(65, 26, 16, 60);
+  if (type === 'crystal') return new THREE.OctahedronGeometry(85, 1);
+  if (type === 'mouth') return new THREE.TorusGeometry(60, 15, 20, 60);
+  if (type === 'water') return new THREE.PlaneGeometry(130, 130, 36, 36);
+  return new THREE.TorusGeometry(60, 15, 20, 60);
+}
+
+function applyBlobNoise(geo) {
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const ix = i * 3;
+    const x = pos.array[ix], y = pos.array[ix+1], z = pos.array[ix+2];
+    const n = Math.sin(x*0.08) * Math.cos(y*0.08) * Math.sin(z*0.08);
+    const scale = 1 + n*0.18;
+    pos.array[ix] = x*scale; pos.array[ix+1] = y*scale; pos.array[ix+2] = z*scale;
+  }
+  pos.needsUpdate = true;
+}
+
+function switchMouthForm(type) {
+  if (mouthMesh) { mouthScene.remove(mouthMesh); mouthGeometry.dispose(); }
+  currentMouthForm = type;
+  mouthGeometry = makeMouthGeometry(type);
+  if (type === 'blob') applyBlobNoise(mouthGeometry);
+  mouthGeometry.computeVertexNormals();
+  mouthMesh = new THREE.Mesh(mouthGeometry, mouthMaterial);
+
+  if (type === 'water') {
+    mouthMesh.rotation.x = -Math.PI / 2;
+    mouthMesh.position.y = -55;
+    mouthBoxHelper.visible = true;
+  } else {
+    mouthBoxHelper.visible = false;
+  }
+
+  mouthScene.add(mouthMesh);
+  mouthBasePositions = mouthGeometry.attributes.position.array.slice();
+}
+
+switchMouthForm('mouth');
+
+document.getElementById('mouthFormSelect').addEventListener('change', (e) => {
+  switchMouthForm(e.target.value);
+});
 
 const mouthRenderer = new THREE.WebGLRenderer();
 const mouthEffect = new THREE.AsciiEffect(mouthRenderer, ' .:-+*=%@#', { invert: true, resolution: 0.2 });
@@ -310,6 +375,8 @@ resizeMouth();
 
 let mouthRotY = 0;
 let mouthLevelSmoothed = 0;
+let mouthClock = 0;
+
 function mouthSmoothedLevel() {
   const raw = micActive ? getVolume() : 0;
   mouthLevelSmoothed += (raw - mouthLevelSmoothed) * 0.2;
@@ -318,10 +385,45 @@ function mouthSmoothedLevel() {
 
 function animateMouth() {
   const smoothed = mouthSmoothedLevel();
+  mouthClock++;
   mouthRotY += 0.002;
-  mouthMesh.rotation.y = mouthRotY;
-  const openAmt = 0.14 + smoothed * 1.15;
-  mouthMesh.scale.set(1.25, openAmt, 0.55);
+
+  if (currentMouthForm === 'water') {
+    mouthMesh.rotation.z = mouthRotY;
+    mouthBoxHelper.rotation.y = mouthRotY;
+
+    const pos = mouthGeometry.attributes.position;
+    const waterLevel = -35 + smoothed * 90;
+    for (let i = 0; i < pos.count; i++) {
+      const ix = i * 3;
+      const lx = mouthBasePositions[ix], ly = mouthBasePositions[ix+1];
+      const ripple = Math.sin(lx*0.15 + mouthClock*0.06)*3 + Math.cos(ly*0.17 + mouthClock*0.08)*3;
+      pos.array[ix+2] = (waterLevel + ripple*(0.3+smoothed)) - mouthMesh.position.y;
+    }
+    pos.needsUpdate = true;
+    mouthGeometry.computeVertexNormals();
+
+  } else if (currentMouthForm === 'mouth') {
+    mouthMesh.rotation.y = mouthRotY;
+    const openAmt = 0.14 + smoothed * 1.15;
+    mouthMesh.scale.set(1.25, openAmt, 0.55);
+
+  } else {
+    mouthMesh.rotation.y = mouthRotY;
+    const pulse = 1 + smoothed * 0.35;
+    mouthMesh.scale.setScalar(pulse);
+
+    const posA = mouthGeometry.attributes.position;
+    for (let j = 0; j < posA.count; j++) {
+      const jx = j * 3;
+      const nx = mouthBasePositions[jx], ny = mouthBasePositions[jx+1], nz = mouthBasePositions[jx+2];
+      const jitter = 1 + (micActive ? smoothed * 0.12 * Math.sin(j + mouthClock*0.1) : 0);
+      posA.array[jx] = nx*jitter; posA.array[jx+1] = ny*jitter; posA.array[jx+2] = nz*jitter;
+    }
+    posA.needsUpdate = true;
+    mouthGeometry.computeVertexNormals();
+  }
+
   mouthEffect.render(mouthScene, mouthCamera);
   requestAnimationFrame(animateMouth);
 }
