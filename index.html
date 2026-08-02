@@ -183,7 +183,7 @@ function renderAsciiVideoFrame() {
     }
     asciiVideoPre.textContent = out;
   }
-  setTimeout(() => requestAnimationFrame(renderAsciiVideoFrame), 60);
+  setTimeout(() => requestAnimationFrame(renderAsciiVideoFrame), 90);
 }
 
 async function connectSerial() {
@@ -249,7 +249,7 @@ async function detectLoop() {
     }
   }
 
-  requestAnimationFrame(detectLoop);
+  setTimeout(() => requestAnimationFrame(detectLoop), 100);
 }
 
 let audioCtx = null, analyser = null, dataArray = null;
@@ -651,10 +651,12 @@ function startRecording() {
     groqStatus.textContent = 'no microphone available';
     return;
   }
+  groqApiKey = groqKeyInput.value.trim();
   if (!groqApiKey) {
     groqStatus.textContent = 'enter and save a Groq API key first';
     return;
   }
+  localStorage.setItem(GROQ_KEY_STORAGE, groqApiKey);
   recordedChunks = [];
   mediaRecorder = new MediaRecorder(micStreamRef);
   mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
@@ -687,7 +689,10 @@ async function handleRecordingStop() {
       headers: { 'Authorization': 'Bearer ' + groqApiKey },
       body: form
     });
-    if (!res.ok) throw new Error('transcription failed: ' + res.status);
+    if (!res.ok) {
+      if (res.status === 401) throw new Error('401 — key rejected. Check it was copied correctly and is active in console.groq.com');
+      throw new Error('transcription failed: ' + res.status);
+    }
     const data = await res.json();
     const userText = (data.text || '').trim();
     if (!userText) {
