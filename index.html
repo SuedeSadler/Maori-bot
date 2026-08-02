@@ -4,118 +4,241 @@
 <meta charset="UTF-8">
 <title>EyeMech Control (Web)</title>
 <style>
+  :root {
+    --bg: #08070c;
+    --panel-bg: #0d0b14;
+    --border: #241d38;
+    --border-soft: #1a1526;
+    --accent: #b9a3f5;
+    --accent-dim: #7a6aa8;
+    --accent-bright: #d9cdfa;
+    --text: #e8e3f5;
+    --text-muted: #6f6690;
+    --live: #6ad1a0;
+    --warn: #e8c07a;
+    --error: #e8837a;
+    --radius: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
   body {
-    font-family: monospace;
-    background: #000;
-    color: #b9a3f5;
+    font-family: 'SF Mono', 'Courier New', monospace;
+    background: var(--bg);
+    color: var(--text);
     margin: 0;
-    padding: 24px;
+    padding: 28px;
     min-height: 100vh;
-  }
-  h1 { font-size: 18px; margin: 0 0 4px; color: #eee; font-weight: normal; }
-  #status { margin-bottom: 16px; color: #7a6aa8; font-size: 13px; }
-  .row { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }
-
-  .panel {
-    background: #000;
-    border: 1px solid #201a2a;
-    border-radius: 8px;
-    padding: 10px;
+    line-height: 1.5;
   }
 
-  #videoPanel { width: 480px; }
+  header { margin-bottom: 24px; }
+  h1 {
+    font-size: 20px; margin: 0 0 6px; color: #fff; font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .tagline { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+
+  .status-line {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--accent-dim);
+    background: var(--panel-bg); border: 1px solid var(--border-soft);
+    border-radius: 20px; padding: 5px 12px;
+  }
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .status-dot.live { background: var(--live); box-shadow: 0 0 6px var(--live); }
+  .status-dot.warn { background: var(--warn); }
+  .status-dot.error { background: var(--error); }
+
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 480px) minmax(280px, 1fr);
+    gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+  .card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    background: #120e1c;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent-dim);
+  }
+  .card-body { padding: 14px; }
+
   #asciiVideoPre {
-    width: 460px; height: 300px;
+    width: 100%; aspect-ratio: 90 / 55;
     font-size: 5px; line-height: 5px; letter-spacing: -1px;
-    white-space: pre; overflow: hidden; color: #6ad1a0; background: #000;
-    font-family: monospace;
+    white-space: pre; overflow: hidden; color: var(--live); background: #000;
+    font-family: monospace; border-radius: 6px;
+    display: block;
   }
 
-  #coords { margin-top: 8px; font-size: 12px; color: #6ad1a0; }
+  #coords {
+    margin-top: 10px; font-size: 12px; color: var(--live);
+    background: #0a1410; border: 1px solid #163326; border-radius: 6px;
+    padding: 6px 10px; display: inline-block;
+  }
+
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 
   button {
-    padding: 8px 16px; font-size: 13px; border-radius: 6px;
-    border: 1px solid #3a2d5c; background: #140f1c; color: #b9a3f5; cursor: pointer;
-    margin-top: 8px; margin-right: 8px;
+    padding: 9px 16px; font-size: 13px; border-radius: 7px;
+    border: 1px solid var(--border); background: #140f1c; color: var(--accent);
+    cursor: pointer; font-family: inherit; transition: border-color 0.15s, background 0.15s;
   }
-  button:disabled { opacity: 0.5; cursor: not-allowed; }
-  .warn { color: #a06a6a; margin-top: 8px; font-size: 12px; max-width: 460px; }
+  button:hover:not(:disabled) { border-color: var(--accent-dim); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .btn-primary {
+    background: var(--accent); color: #120e1c; border-color: var(--accent); font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
+
+  .note {
+    color: var(--text-muted); margin-top: 10px; font-size: 11.5px; line-height: 1.5;
+  }
+
+  .field-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-muted); margin-bottom: 8px;
+  }
+
+  textarea, input[type="password"], input[type="text"] {
+    width: 100%; box-sizing: border-box; background: #140f1c; color: var(--text);
+    border: 1px solid var(--border); border-radius: 7px; padding: 9px;
+    font-family: monospace; font-size: 13px; resize: vertical;
+  }
+  textarea:focus, input:focus { outline: none; border-color: var(--accent-dim); }
+
+  .inline-status { font-size: 12px; color: var(--accent-dim); margin-left: 8px; }
+
+  #groqTranscript {
+    margin-top: 10px; font-size: 12px; color: #9d8bc7;
+    max-height: 140px; overflow-y: auto; white-space: pre-wrap;
+    background: #0a0812; border: 1px solid var(--border-soft); border-radius: 6px;
+    padding: 8px; min-height: 20px;
+  }
 
   #mouthPanel {
-    position: absolute;
-    top: 24px;
-    left: 540px;
-    width: 320px;
-    height: 240px;
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    width: 100%;
+    height: 420px;
     resize: both;
     overflow: hidden;
-    min-width: 180px;
-    min-height: 140px;
-    background: #000;
-    border: 1px solid #3a2d5c;
-    border-radius: 8px;
+    min-width: 220px;
+    min-height: 200px;
+  }
+  #mouthPanel.undocked {
+    position: fixed;
+    z-index: 50;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
   }
   #mouthHandle {
-    height: 22px;
-    background: #140f1c;
-    border-bottom: 1px solid #3a2d5c;
+    height: 34px;
+    background: #120e1c;
+    border-bottom: 1px solid var(--border);
     cursor: grab;
-    display: flex; align-items: center; padding: 0 8px;
-    font-size: 11px; color: #7a6aa8; user-select: none;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 12px;
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-dim);
+    user-select: none;
   }
   #mouthHandle:active { cursor: grabbing; }
-  #mouthContainer { width: 100%; height: calc(100% - 48px); overflow: hidden; }
+  #mouthFormSelect {
+    width: 100%; background: #140f1c; color: var(--accent);
+    border: none; border-bottom: 1px solid var(--border);
+    padding: 8px 12px; font-family: monospace; font-size: 12px;
+  }
+  #mouthContainer { width: 100%; height: calc(100% - 66px); overflow: hidden; }
 </style>
 </head>
 <body>
 
-<h1>EyeMech Control</h1>
-<div id="status">Loading face detection model...</div>
+<header>
+  <h1>EyeMech Control</h1>
+  <div class="tagline">Face tracking, voice, and expression control for the eye mechanism</div>
+  <div class="status-line"><span class="status-dot" id="statusDot"></span><span id="status">Loading face detection model...</span></div>
+</header>
 
-<div class="row">
-  <div class="panel" id="videoPanel">
-    <video id="video" autoplay muted playsinline style="display:none;"></video>
-    <pre id="asciiVideoPre"></pre>
-    <div id="coords">x: -- , y: --</div>
-    <button id="connectBtn" disabled>Connect to Pico (Web Serial)</button>
-    <button id="micBtn">Enable microphone (for mouth)</button>
-    <div class="warn">Requires Chrome or Edge. The Pico must not be connected to Thonny at the same time.</div>
+<div class="layout">
+  <div class="stack">
 
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid #201a2a;">
-      <div style="font-size:12px; color:#7a6aa8; margin-bottom:6px;">Text to speech (Kokoro-82M, runs locally)</div>
-      <textarea id="ttsText" rows="2" placeholder="Type something for the bot to say..."
-        style="width:100%; box-sizing:border-box; background:#140f1c; color:#eee; border:1px solid #3a2d5c; border-radius:6px; padding:8px; font-family:monospace; font-size:13px; resize:vertical;"></textarea>
-      <button id="ttsBtn">Speak</button>
-      <span id="ttsStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;">model not loaded yet</span>
-    </div>
-
-    <div style="margin-top:14px; padding-top:12px; border-top:1px solid #201a2a;">
-      <div style="font-size:12px; color:#7a6aa8; margin-bottom:6px;">Groq assistant (free tier — listens, thinks, speaks)</div>
-      <input id="groqKeyInput" type="password" placeholder="Groq API key (gsk_...)"
-        style="width:100%; box-sizing:border-box; background:#140f1c; color:#eee; border:1px solid #3a2d5c; border-radius:6px; padding:8px; font-family:monospace; font-size:13px; margin-bottom:6px;">
-      <button id="groqSaveKeyBtn">Save key</button>
-      <span id="groqKeyStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;"></span>
-      <div style="margin-top:8px;">
-        <button id="groqTalkBtn">Hold to talk</button>
-        <span id="groqStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;">idle</span>
+    <div class="card" id="videoPanel">
+      <div class="card-header">Camera feed &amp; eye tracking</div>
+      <div class="card-body">
+        <video id="video" autoplay muted playsinline style="display:none;"></video>
+        <pre id="asciiVideoPre"></pre>
+        <div id="coords">x: -- , y: --</div>
+        <div class="btn-row">
+          <button id="connectBtn" class="btn-primary" disabled>Connect to Pico (Web Serial)</button>
+          <button id="micBtn">Enable microphone (for mouth)</button>
+        </div>
+        <div class="note">Requires Chrome or Edge. The Pico must not be connected to Thonny at the same time.</div>
       </div>
-      <div id="groqTranscript" style="margin-top:8px; font-size:12px; color:#9d8bc7; max-height:140px; overflow-y:auto; white-space:pre-wrap;"></div>
     </div>
-  </div>
-</div>
 
-<div id="mouthPanel">
-  <div id="mouthHandle">mouth — drag to move, corner to resize</div>
-  <select id="mouthFormSelect" style="width:100%; background:#140f1c; color:#b9a3f5; border:none; border-bottom:1px solid #3a2d5c; padding:4px 8px; font-family:monospace; font-size:11px;">
-    <option value="mouth">mouth (opens when talking)</option>
-    <option value="water">water box (rises when talking)</option>
-    <option value="orb">orb</option>
-    <option value="blob">blob</option>
-    <option value="knot">knot</option>
-    <option value="ring">ring</option>
-    <option value="crystal">crystal</option>
-  </select>
-  <div id="mouthContainer"></div>
+    <div class="card">
+      <div class="card-header">Text to speech — Kokoro-82M, runs locally</div>
+      <div class="card-body">
+        <textarea id="ttsText" rows="2" placeholder="Type something for the bot to say..."></textarea>
+        <div class="btn-row">
+          <button id="ttsBtn" class="btn-primary">Speak</button>
+          <span id="ttsStatus" class="inline-status">model not loaded yet</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Groq assistant — free tier, listens · thinks · speaks</div>
+      <div class="card-body">
+        <div class="field-label">API key</div>
+        <input id="groqKeyInput" type="password" placeholder="Groq API key (gsk_...)">
+        <div class="btn-row">
+          <button id="groqSaveKeyBtn">Save key</button>
+          <span id="groqKeyStatus" class="inline-status"></span>
+        </div>
+        <div class="btn-row">
+          <button id="groqTalkBtn" class="btn-primary">Hold to talk</button>
+          <span id="groqStatus" class="inline-status">idle</span>
+        </div>
+        <div id="groqTranscript"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="mouthPanel">
+    <div id="mouthHandle">
+      <span>Mouth — drag to move, corner to resize</span>
+    </div>
+    <select id="mouthFormSelect">
+      <option value="mouth">mouth (opens when talking)</option>
+      <option value="water">water box (rises when talking)</option>
+      <option value="orb">orb</option>
+      <option value="blob">blob</option>
+      <option value="knot">knot</option>
+      <option value="ring">ring</option>
+      <option value="crystal">crystal</option>
+    </select>
+    <div id="mouthContainer"></div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
@@ -127,6 +250,7 @@
 const video = document.getElementById('video');
 const asciiVideoPre = document.getElementById('asciiVideoPre');
 const statusEl = document.getElementById('status');
+const statusDot = document.getElementById('statusDot');
 const coordsEl = document.getElementById('coords');
 const connectBtn = document.getElementById('connectBtn');
 const micBtn = document.getElementById('micBtn');
@@ -206,6 +330,7 @@ function renderAsciiVideoFrame() {
 async function connectSerial() {
   if (!('serial' in navigator)) {
     statusEl.textContent = 'Web Serial API not supported. Use Chrome or Edge.';
+    statusDot.className = 'status-dot error';
     return;
   }
   try {
@@ -213,10 +338,12 @@ async function connectSerial() {
     await port.open({ baudRate: 115200 });
     writer = port.writable.getWriter();
     statusEl.textContent = 'Connected to Pico. Tracking active.';
+    statusDot.className = 'status-dot live';
     connectBtn.textContent = 'Connected';
     connectBtn.disabled = true;
   } catch (err) {
     statusEl.textContent = 'Serial connection failed: ' + err.message;
+    statusDot.className = 'status-dot error';
   }
 }
 
@@ -316,8 +443,18 @@ const mouthHandle = document.getElementById('mouthHandle');
 const mouthContainer = document.getElementById('mouthContainer');
 
 (function makeDraggable() {
-  let dragging = false, offX = 0, offY = 0;
+  let dragging = false, offX = 0, offY = 0, undocked = false;
+
   mouthHandle.addEventListener('pointerdown', (e) => {
+    if (!undocked) {
+      const rect = mouthPanel.getBoundingClientRect();
+      mouthPanel.style.width = rect.width + 'px';
+      mouthPanel.style.height = rect.height + 'px';
+      mouthPanel.style.left = rect.left + 'px';
+      mouthPanel.style.top = rect.top + 'px';
+      mouthPanel.classList.add('undocked');
+      undocked = true;
+    }
     dragging = true;
     offX = e.clientX - mouthPanel.offsetLeft;
     offY = e.clientY - mouthPanel.offsetTop;
@@ -482,23 +619,26 @@ async function init() {
   animateMouth(); // mouth doesn't depend on the camera; start it immediately
 
   try {
+    statusDot.className = 'status-dot warn';
     statusEl.textContent = 'Requesting camera access...';
     await setupMedia();
     statusEl.textContent = 'Camera ready. Loading face detection model...';
-    console.log('Loading blazeface model...');
 
+    console.log('Loading blazeface model...');
     const modelTimeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('blazeface.load() timed out after 15s — likely blocked by an extension or network issue')), 15000)
     );
     model = await Promise.race([blazeface.load(), modelTimeout]);
     console.log('blazeface model loaded');
     statusEl.textContent = 'Model loaded. Click "Connect to Pico" to begin.';
+    statusDot.className = 'status-dot live';
     connectBtn.disabled = false;
     detectLoop();
     renderAsciiVideoFrame();
   } catch (err) {
     console.error('init() failed at:', err);
     statusEl.textContent = 'Error: ' + err.message + ' (see console for details)';
+    statusDot.className = 'status-dot error';
   }
 }
 
