@@ -463,44 +463,89 @@ init().catch(err => {
 });
 </script>
 
-<script type="module">
-import { KokoroTTS } from 'https://esm.sh/kokoro-js';
-
+<script>
 const ttsBtn = document.getElementById('ttsBtn');
 const ttsText = document.getElementById('ttsText');
 const ttsStatus = document.getElementById('ttsStatus');
 
+const ttsWorkerCode = `
+import { KokoroTTS } from 'https://esm.sh/kokoro-js';
+
 let tts = null;
+
+self.onmessage = async (e) => {
+  const msg = e.data;
+
+  if (msg.type === 'load') {
+    try {
+      tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+        dtype: 'q8',
+        device: 'wasm'
+      });
+      self.postMessage({ type: 'ready' });
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message });
+    }
+  }
+
+  if (msg.type === 'generate') {
+    if (!tts) {
+      self.postMessage({ type: 'error', message: 'model not loaded yet' });
+      return;
+    }
+    try {
+      const audio = await tts.generate(msg.text, { voice: msg.voice || 'af_heart' });
+      const floatData = audio.audio;
+      const sampleRate = audio.sampling_rate || 24000;
+      self.postMessage(
+        { type: 'audio', audio: floatData, sampleRate },
+        [floatData.buffer]
+      );
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message });
+    }
+  }
+};
+`;
+
+const ttsWorkerBlob = new Blob([ttsWorkerCode], { type: 'application/javascript' });
+const ttsWorker = new Worker(URL.createObjectURL(ttsWorkerBlob), { type: 'module' });
+
+let ttsReady = false;
 let ttsLoading = false;
 
-async function ensureTTSLoaded() {
-  if (tts) return tts;
-  if (ttsLoading) return null;
-  ttsLoading = true;
-  ttsStatus.textContent = 'downloading model (first use only, ~100MB+)...';
-  ttsBtn.disabled = true;
-  try {
-    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
-      dtype: 'q8',
-      device: 'wasm'
-    });
+ttsWorker.onmessage = (e) => {
+  const msg = e.data;
+
+  if (msg.type === 'ready') {
+    ttsReady = true;
+    ttsLoading = false;
     ttsStatus.textContent = 'model ready';
-  } catch (err) {
-    ttsStatus.textContent = 'model failed to load: ' + err.message;
+    ttsBtn.disabled = false;
   }
-  ttsBtn.disabled = false;
-  ttsLoading = false;
-  return tts;
+
+  if (msg.type === 'error') {
+    ttsStatus.textContent = 'error: ' + msg.message;
+    ttsBtn.disabled = false;
+    ttsLoading = false;
+  }
+
+  if (msg.type === 'audio') {
+    playGeneratedAudio(msg.audio, msg.sampleRate);
+  }
+};
+
+function loadTTS() {
+  if (ttsReady || ttsLoading) return;
+  ttsLoading = true;
+  ttsBtn.disabled = true;
+  ttsStatus.textContent = 'downloading model (first use only, ~100MB+, runs in background)...';
+  ttsWorker.postMessage({ type: 'load' });
 }
 
-async function playGeneratedAudio(rawAudio) {
-  // ensure the shared audio context/analyser exist (reuses the same
-  // analyser the mouth reads from, so speech drives the mouth too)
+function playGeneratedAudio(floatData, sampleRate) {
   if (!window.__ensureAnalyserForTTS) return;
   const { ctx, analyser, setTtsActive } = window.__ensureAnalyserForTTS();
-
-  const floatData = rawAudio.audio;
-  const sampleRate = rawAudio.sampling_rate || 24000;
 
   const buffer = ctx.createBuffer(1, floatData.length, sampleRate);
   buffer.copyToChannel(floatData, 0);
@@ -512,6 +557,7 @@ async function playGeneratedAudio(rawAudio) {
 
   setTtsActive(true);
   ttsStatus.textContent = 'speaking...';
+  ttsBtn.disabled = false;
   source.start();
   source.onended = () => {
     setTtsActive(false);
@@ -519,19 +565,31 @@ async function playGeneratedAudio(rawAudio) {
   };
 }
 
-ttsBtn.addEventListener('click', async () => {
+ttsBtn.addEventListener('click', () => {
   const text = ttsText.value.trim();
   if (!text) return;
-  const model = await ensureTTSLoaded();
-  if (!model) return;
-  ttsStatus.textContent = 'generating...';
-  try {
-    const audio = await model.generate(text, { voice: 'af_heart' });
-    await playGeneratedAudio(audio);
-  } catch (err) {
-    ttsStatus.textContent = 'error: ' + err.message;
+
+  if (!ttsReady) {
+    loadTTS();
+    ttsStatus.textContent = 'loading model, will speak once ready...';
+    const pending = text;
+    const checkReady = setInterval(() => {
+      if (ttsReady) {
+        clearInterval(checkReady);
+        ttsBtn.disabled = true;
+        ttsStatus.textContent = 'generating...';
+        ttsWorker.postMessage({ type: 'generate', text: pending, voice: 'af_heart' });
+      }
+    }, 300);
+    return;
   }
+
+  ttsBtn.disabled = true;
+  ttsStatus.textContent = 'generating...';
+  ttsWorker.postMessage({ type: 'generate', text, voice: 'af_heart' });
 });
+
+loadTTS();
 </script>
 
 </body>
