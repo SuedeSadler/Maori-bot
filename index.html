@@ -88,6 +88,19 @@
       <button id="ttsBtn">Speak</button>
       <span id="ttsStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;">model not loaded yet</span>
     </div>
+
+    <div style="margin-top:14px; padding-top:12px; border-top:1px solid #201a2a;">
+      <div style="font-size:12px; color:#7a6aa8; margin-bottom:6px;">Groq assistant (free tier — listens, thinks, speaks)</div>
+      <input id="groqKeyInput" type="password" placeholder="Groq API key (gsk_...)"
+        style="width:100%; box-sizing:border-box; background:#140f1c; color:#eee; border:1px solid #3a2d5c; border-radius:6px; padding:8px; font-family:monospace; font-size:13px; margin-bottom:6px;">
+      <button id="groqSaveKeyBtn">Save key</button>
+      <span id="groqKeyStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;"></span>
+      <div style="margin-top:8px;">
+        <button id="groqTalkBtn">Hold to talk</button>
+        <span id="groqStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;">idle</span>
+      </div>
+      <div id="groqTranscript" style="margin-top:8px; font-size:12px; color:#9d8bc7; max-height:140px; overflow-y:auto; white-space:pre-wrap;"></div>
+    </div>
   </div>
 </div>
 
@@ -122,6 +135,7 @@ let model = null;
 let port = null;
 let writer = null;
 let lastFaceTime = 0;
+let micStreamRef = null;
 const FACE_TIMEOUT_MS = 800;
 
 async function setupMedia() {
@@ -133,7 +147,8 @@ async function setupMedia() {
 
   const audioTracks = stream.getAudioTracks();
   if (audioTracks.length > 0) {
-    setupAudioAnalyser(new MediaStream(audioTracks));
+    micStreamRef = new MediaStream(audioTracks);
+    setupAudioAnalyser(micStreamRef);
   }
 
   return new Promise(resolve => {
@@ -565,8 +580,7 @@ function playGeneratedAudio(floatData, sampleRate) {
   };
 }
 
-ttsBtn.addEventListener('click', () => {
-  const text = ttsText.value.trim();
+function speakText(text) {
   if (!text) return;
 
   if (!ttsReady) {
@@ -587,9 +601,138 @@ ttsBtn.addEventListener('click', () => {
   ttsBtn.disabled = true;
   ttsStatus.textContent = 'generating...';
   ttsWorker.postMessage({ type: 'generate', text, voice: 'af_heart' });
+}
+
+ttsBtn.addEventListener('click', () => {
+  speakText(ttsText.value.trim());
 });
 
 loadTTS();
+</script>
+
+<script>
+const groqKeyInput = document.getElementById('groqKeyInput');
+const groqSaveKeyBtn = document.getElementById('groqSaveKeyBtn');
+const groqKeyStatus = document.getElementById('groqKeyStatus');
+const groqTalkBtn = document.getElementById('groqTalkBtn');
+const groqStatus = document.getElementById('groqStatus');
+const groqTranscript = document.getElementById('groqTranscript');
+
+const GROQ_KEY_STORAGE = 'groq_api_key';
+let groqApiKey = localStorage.getItem(GROQ_KEY_STORAGE) || '';
+if (groqApiKey) {
+  groqKeyInput.value = groqApiKey;
+  groqKeyStatus.textContent = 'key loaded';
+}
+
+groqSaveKeyBtn.addEventListener('click', () => {
+  groqApiKey = groqKeyInput.value.trim();
+  localStorage.setItem(GROQ_KEY_STORAGE, groqApiKey);
+  groqKeyStatus.textContent = groqApiKey ? 'key saved' : 'key cleared';
+});
+
+const conversationHistory = [
+  { role: 'system', content: 'You are a friendly robot assistant with an animated eye and mouth mechanism. Keep replies short and conversational, ideally one or two sentences, since they will be spoken aloud.' }
+];
+
+function appendTranscript(label, text) {
+  const line = document.createElement('div');
+  line.textContent = label + ': ' + text;
+  groqTranscript.appendChild(line);
+  groqTranscript.scrollTop = groqTranscript.scrollHeight;
+}
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let recording = false;
+
+function startRecording() {
+  if (!micStreamRef) {
+    groqStatus.textContent = 'no microphone available';
+    return;
+  }
+  if (!groqApiKey) {
+    groqStatus.textContent = 'enter and save a Groq API key first';
+    return;
+  }
+  recordedChunks = [];
+  mediaRecorder = new MediaRecorder(micStreamRef);
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = handleRecordingStop;
+  mediaRecorder.start();
+  recording = true;
+  groqStatus.textContent = 'listening...';
+  groqTalkBtn.textContent = 'Release to send';
+}
+
+function stopRecording() {
+  if (mediaRecorder && recording) {
+    mediaRecorder.stop();
+    recording = false;
+    groqTalkBtn.textContent = 'Hold to talk';
+  }
+}
+
+async function handleRecordingStop() {
+  groqStatus.textContent = 'transcribing...';
+  const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+
+  const form = new FormData();
+  form.append('file', blob, 'speech.webm');
+  form.append('model', 'whisper-large-v3-turbo');
+
+  try {
+    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + groqApiKey },
+      body: form
+    });
+    if (!res.ok) throw new Error('transcription failed: ' + res.status);
+    const data = await res.json();
+    const userText = (data.text || '').trim();
+    if (!userText) {
+      groqStatus.textContent = 'idle';
+      return;
+    }
+    appendTranscript('You', userText);
+    conversationHistory.push({ role: 'user', content: userText });
+
+    groqStatus.textContent = 'thinking...';
+    const replyText = await getGroqChatReply();
+    appendTranscript('Bot', replyText);
+    conversationHistory.push({ role: 'assistant', content: replyText });
+
+    groqStatus.textContent = 'speaking...';
+    speakText(replyText);
+    groqStatus.textContent = 'idle';
+  } catch (err) {
+    groqStatus.textContent = 'error: ' + err.message;
+  }
+}
+
+async function getGroqChatReply() {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + groqApiKey,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'llama-3.3-70b-versatile',
+      messages: conversationHistory,
+      max_tokens: 200
+    })
+  });
+  if (!res.ok) throw new Error('chat failed: ' + res.status);
+  const data = await res.json();
+  return data.choices[0].message.content.trim();
+}
+
+groqTalkBtn.addEventListener('mousedown', startRecording);
+groqTalkBtn.addEventListener('mouseup', stopRecording);
+groqTalkBtn.addEventListener('mouseleave', () => { if (recording) stopRecording(); });
+groqTalkBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+groqTalkBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
 </script>
 
 </body>
