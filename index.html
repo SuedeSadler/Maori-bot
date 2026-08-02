@@ -80,6 +80,14 @@
     <button id="connectBtn" disabled>Connect to Pico (Web Serial)</button>
     <button id="micBtn">Enable microphone (for mouth)</button>
     <div class="warn">Requires Chrome or Edge. The Pico must not be connected to Thonny at the same time.</div>
+
+    <div style="margin-top:14px; padding-top:12px; border-top:1px solid #201a2a;">
+      <div style="font-size:12px; color:#7a6aa8; margin-bottom:6px;">Text to speech (Kokoro-82M, runs locally)</div>
+      <textarea id="ttsText" rows="2" placeholder="Type something for the bot to say..."
+        style="width:100%; box-sizing:border-box; background:#140f1c; color:#eee; border:1px solid #3a2d5c; border-radius:6px; padding:8px; font-family:monospace; font-size:13px; resize:vertical;"></textarea>
+      <button id="ttsBtn">Speak</button>
+      <span id="ttsStatus" style="font-size:12px; color:#7a6aa8; margin-left:6px;">model not loaded yet</span>
+    </div>
   </div>
 </div>
 
@@ -231,18 +239,28 @@ async function detectLoop() {
 
 let audioCtx = null, analyser = null, dataArray = null;
 let micActive = false;
+let ttsActive = false;
 
 function setupAudioAnalyser(micStream) {
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 256;
-  dataArray = new Uint8Array(analyser.frequencyBinCount);
+  ensureAudioCtxAndAnalyser();
   const source = audioCtx.createMediaStreamSource(micStream);
   source.connect(analyser);
   micActive = true;
   micBtn.textContent = 'Microphone active';
   micBtn.disabled = true;
 }
+
+function ensureAudioCtxAndAnalyser() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+  }
+  return { ctx: audioCtx, analyser, setTtsActive: (v) => { ttsActive = v; } };
+}
+
+window.__ensureAnalyserForTTS = ensureAudioCtxAndAnalyser;
 
 function getVolume() {
   if (!analyser) return 0;
@@ -378,7 +396,7 @@ let mouthLevelSmoothed = 0;
 let mouthClock = 0;
 
 function mouthSmoothedLevel() {
-  const raw = micActive ? getVolume() : 0;
+  const raw = (micActive || ttsActive) ? getVolume() : 0;
   mouthLevelSmoothed += (raw - mouthLevelSmoothed) * 0.2;
   return mouthLevelSmoothed;
 }
@@ -417,7 +435,7 @@ function animateMouth() {
     for (let j = 0; j < posA.count; j++) {
       const jx = j * 3;
       const nx = mouthBasePositions[jx], ny = mouthBasePositions[jx+1], nz = mouthBasePositions[jx+2];
-      const jitter = 1 + (micActive ? smoothed * 0.12 * Math.sin(j + mouthClock*0.1) : 0);
+      const jitter = 1 + ((micActive || ttsActive) ? smoothed * 0.12 * Math.sin(j + mouthClock*0.1) : 0);
       posA.array[jx] = nx*jitter; posA.array[jx+1] = ny*jitter; posA.array[jx+2] = nz*jitter;
     }
     posA.needsUpdate = true;
@@ -442,6 +460,77 @@ connectBtn.addEventListener('click', connectSerial);
 
 init().catch(err => {
   statusEl.textContent = 'Error: ' + err.message;
+});
+</script>
+
+<script type="module">
+import { KokoroTTS } from 'https://esm.sh/kokoro-js';
+
+const ttsBtn = document.getElementById('ttsBtn');
+const ttsText = document.getElementById('ttsText');
+const ttsStatus = document.getElementById('ttsStatus');
+
+let tts = null;
+let ttsLoading = false;
+
+async function ensureTTSLoaded() {
+  if (tts) return tts;
+  if (ttsLoading) return null;
+  ttsLoading = true;
+  ttsStatus.textContent = 'downloading model (first use only, ~100MB+)...';
+  ttsBtn.disabled = true;
+  try {
+    tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+      dtype: 'q8',
+      device: 'wasm'
+    });
+    ttsStatus.textContent = 'model ready';
+  } catch (err) {
+    ttsStatus.textContent = 'model failed to load: ' + err.message;
+  }
+  ttsBtn.disabled = false;
+  ttsLoading = false;
+  return tts;
+}
+
+async function playGeneratedAudio(rawAudio) {
+  // ensure the shared audio context/analyser exist (reuses the same
+  // analyser the mouth reads from, so speech drives the mouth too)
+  if (!window.__ensureAnalyserForTTS) return;
+  const { ctx, analyser, setTtsActive } = window.__ensureAnalyserForTTS();
+
+  const floatData = rawAudio.audio;
+  const sampleRate = rawAudio.sampling_rate || 24000;
+
+  const buffer = ctx.createBuffer(1, floatData.length, sampleRate);
+  buffer.copyToChannel(floatData, 0);
+
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(analyser);
+  source.connect(ctx.destination);
+
+  setTtsActive(true);
+  ttsStatus.textContent = 'speaking...';
+  source.start();
+  source.onended = () => {
+    setTtsActive(false);
+    ttsStatus.textContent = 'model ready';
+  };
+}
+
+ttsBtn.addEventListener('click', async () => {
+  const text = ttsText.value.trim();
+  if (!text) return;
+  const model = await ensureTTSLoaded();
+  if (!model) return;
+  ttsStatus.textContent = 'generating...';
+  try {
+    const audio = await model.generate(text, { voice: 'af_heart' });
+    await playGeneratedAudio(audio);
+  } catch (err) {
+    ttsStatus.textContent = 'error: ' + err.message;
+  }
 });
 </script>
 
