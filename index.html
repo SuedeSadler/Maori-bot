@@ -493,11 +493,19 @@ self.onmessage = async (e) => {
 
   if (msg.type === 'load') {
     try {
-      tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
-        dtype: 'q8',
-        device: 'wasm'
-      });
-      self.postMessage({ type: 'ready' });
+      try {
+        tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+          dtype: 'fp32',
+          device: 'webgpu'
+        });
+        self.postMessage({ type: 'ready', backend: 'webgpu' });
+      } catch (webgpuErr) {
+        tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+          dtype: 'q8',
+          device: 'wasm'
+        });
+        self.postMessage({ type: 'ready', backend: 'wasm' });
+      }
     } catch (err) {
       self.postMessage({ type: 'error', message: err.message });
     }
@@ -535,7 +543,7 @@ ttsWorker.onmessage = (e) => {
   if (msg.type === 'ready') {
     ttsReady = true;
     ttsLoading = false;
-    ttsStatus.textContent = 'model ready';
+    ttsStatus.textContent = 'model ready (' + (msg.backend || 'unknown') + ')';
     ttsBtn.disabled = false;
   }
 
