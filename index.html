@@ -139,13 +139,17 @@ let micStreamRef = null;
 const FACE_TIMEOUT_MS = 800;
 
 async function setupMedia() {
+  console.log('Requesting camera...');
   const videoStream = await navigator.mediaDevices.getUserMedia({
     video: { width: 480, height: 360 }
   });
+  console.log('Camera granted:', videoStream);
   video.srcObject = videoStream;
 
   try {
+    console.log('Requesting microphone...');
     const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log('Microphone granted:', audioStream);
     micStreamRef = audioStream;
     setupAudioAnalyser(micStreamRef);
   } catch (audioErr) {
@@ -153,7 +157,19 @@ async function setupMedia() {
   }
 
   return new Promise(resolve => {
-    video.onloadedmetadata = () => resolve();
+    let resolved = false;
+    const done = () => {
+      if (resolved) return;
+      resolved = true;
+      console.log('Video metadata ready, size:', video.videoWidth, video.videoHeight);
+      resolve();
+    };
+    video.onloadedmetadata = done;
+    // fallback in case onloadedmetadata doesn't fire for some reason
+    setTimeout(() => {
+      if (!resolved) console.warn('onloadedmetadata never fired after 3s, resolving anyway');
+      done();
+    }, 3000);
   });
 }
 
@@ -463,20 +479,32 @@ function animateMouth() {
 }
 
 async function init() {
-  await setupMedia();
-  model = await blazeface.load();
-  statusEl.textContent = 'Model loaded. Click "Connect to Pico" to begin.';
-  connectBtn.disabled = false;
-  detectLoop();
-  renderAsciiVideoFrame();
-  animateMouth();
+  animateMouth(); // mouth doesn't depend on the camera; start it immediately
+
+  try {
+    statusEl.textContent = 'Requesting camera access...';
+    await setupMedia();
+    statusEl.textContent = 'Camera ready. Loading face detection model...';
+    console.log('Loading blazeface model...');
+
+    const modelTimeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('blazeface.load() timed out after 15s — likely blocked by an extension or network issue')), 15000)
+    );
+    model = await Promise.race([blazeface.load(), modelTimeout]);
+    console.log('blazeface model loaded');
+    statusEl.textContent = 'Model loaded. Click "Connect to Pico" to begin.';
+    connectBtn.disabled = false;
+    detectLoop();
+    renderAsciiVideoFrame();
+  } catch (err) {
+    console.error('init() failed at:', err);
+    statusEl.textContent = 'Error: ' + err.message + ' (see console for details)';
+  }
 }
 
 connectBtn.addEventListener('click', connectSerial);
 
-init().catch(err => {
-  statusEl.textContent = 'Error: ' + err.message;
-});
+init();
 </script>
 
 <script>
