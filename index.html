@@ -191,6 +191,30 @@
           <button id="micBtn">Enable microphone (for mouth)</button>
         </div>
         <div class="note">Requires Chrome or Edge. The Pico must not be connected to Thonny at the same time.</div>
+
+        <div style="margin-top:14px; padding-top:12px; border-top:1px solid var(--border-soft);">
+          <div class="field-label">WiFi (MQTT) — works from anywhere, no USB needed</div>
+          <input id="mqttTopicInput" type="text" placeholder="topic id, e.g. eyemech/your-id/coords">
+          <div class="btn-row">
+            <button id="mqttConnectBtn" class="btn-primary">Connect via WiFi</button>
+            <span id="mqttStatus" class="inline-status">not connected</span>
+          </div>
+          <div class="note">This ID must exactly match the MQTT_TOPIC set in the Pico's script.</div>
+
+          <div class="btn-row">
+            <button id="sleepBtn" class="btn-primary">Sleep</button>
+            <button id="idleBtn">Random look</button>
+            <button id="trackBtn">Tracking (camera)</button>
+            <button id="controlBtn">Control mode (joystick)</button>
+            <button id="recenterBtn">Recenter</button>
+          </div>
+          <div id="activeModeLabel" class="inline-status" style="display:block; margin-top:6px;">mode: sleep</div>
+
+          <div class="field-label" style="margin-top:12px;">Manual control — drag to move eyes (only active in Control mode)</div>
+          <div id="joystickPad" style="width:140px; height:140px; border-radius:50%; background:#140f1c; border:1px solid var(--border); position:relative; touch-action:none; cursor:grab; opacity:0.4;">
+            <div id="joystickKnob" style="width:36px; height:36px; border-radius:50%; background:var(--accent); position:absolute; left:52px; top:52px; pointer-events:none;"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -245,6 +269,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://unpkg.com/three@0.128.0/examples/js/effects/AsciiEffect.js"></script>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
 
 <script>
 const video = document.getElementById('video');
@@ -351,13 +376,153 @@ async function connectSerial() {
   }
 }
 
+/* ---------- WiFi / MQTT connection ---------- */
+const mqttTopicInput = document.getElementById('mqttTopicInput');
+const mqttConnectBtn = document.getElementById('mqttConnectBtn');
+const mqttStatus = document.getElementById('mqttStatus');
+
+const MQTT_TOPIC_STORAGE = 'eyemech_mqtt_topic';
+let mqttTopic = localStorage.getItem(MQTT_TOPIC_STORAGE) || ('eyemech/' + Math.random().toString(36).slice(2, 10) + '/coords');
+mqttTopicInput.value = mqttTopic;
+localStorage.setItem(MQTT_TOPIC_STORAGE, mqttTopic);
+
+let mqttClient = null;
+
+mqttConnectBtn.addEventListener('click', () => {
+  mqttTopic = mqttTopicInput.value.trim();
+  if (!mqttTopic) {
+    mqttStatus.textContent = 'enter a topic id first';
+    return;
+  }
+  localStorage.setItem(MQTT_TOPIC_STORAGE, mqttTopic);
+
+  mqttStatus.textContent = 'connecting...';
+  mqttConnectBtn.disabled = true;
+
+  mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt');
+
+  mqttClient.on('connect', () => {
+    mqttStatus.textContent = 'connected — publishing to ' + mqttTopic;
+    mqttConnectBtn.textContent = 'Connected';
+    statusDot.className = 'status-dot live';
+  });
+
+  mqttClient.on('error', (err) => {
+    mqttStatus.textContent = 'error: ' + err.message;
+    mqttConnectBtn.disabled = false;
+  });
+
+  mqttClient.on('close', () => {
+    mqttStatus.textContent = 'disconnected';
+    mqttConnectBtn.disabled = false;
+    mqttConnectBtn.textContent = 'Connect via WiFi';
+  });
+});
+
+function getControlTopic() {
+  return mqttTopic.endsWith('/coords')
+    ? mqttTopic.slice(0, -'/coords'.length) + '/control'
+    : mqttTopic + '/control';
+}
+
+function sendControl(command) {
+  if (!mqttClient || !mqttClient.connected) {
+    mqttStatus.textContent = 'not connected — click "Connect via WiFi" first';
+    return;
+  }
+  mqttClient.publish(getControlTopic(), command);
+}
+
+/* ---------- mode state (frontend-side gating, independent of Pico's own state) ---------- */
+const activeModeLabel = document.getElementById('activeModeLabel');
+const joystickPadEl = document.getElementById('joystickPad');
+let frontendMode = 'sleep'; // 'sleep' | 'idle' | 'camera' | 'control'
+
+function setFrontendMode(mode) {
+  frontendMode = mode;
+  activeModeLabel.textContent = 'mode: ' + mode;
+  joystickPadEl.style.opacity = (mode === 'control') ? '1' : '0.4';
+}
+
+document.getElementById('sleepBtn').addEventListener('click', () => {
+  sendControl('sleep');
+  setFrontendMode('sleep');
+});
+document.getElementById('idleBtn').addEventListener('click', () => {
+  sendControl('idle');
+  setFrontendMode('idle');
+});
+document.getElementById('trackBtn').addEventListener('click', () => {
+  sendControl('track');
+  setFrontendMode('camera');
+});
+document.getElementById('controlBtn').addEventListener('click', () => {
+  sendControl('track'); // Pico doesn't distinguish source — same underlying mode
+  setFrontendMode('control');
+});
+document.getElementById('recenterBtn').addEventListener('click', () => sendControl('recenter'));
+
+/* ---------- manual joystick ---------- */
+const joystickPad = document.getElementById('joystickPad');
+const joystickKnob = document.getElementById('joystickKnob');
+const PAD_RADIUS = 70;
+const KNOB_RADIUS = 18;
+let joystickDragging = false;
+
+function setKnobPosition(normX, normY) {
+  const x = PAD_RADIUS + normX * (PAD_RADIUS - KNOB_RADIUS) - KNOB_RADIUS;
+  const y = PAD_RADIUS + normY * (PAD_RADIUS - KNOB_RADIUS) - KNOB_RADIUS;
+  joystickKnob.style.left = x + 'px';
+  joystickKnob.style.top = y + 'px';
+}
+
+function publishJoystick(normX, normY) {
+  if (frontendMode === 'control' && mqttClient && mqttClient.connected) {
+    mqttClient.publish(mqttTopic, `${normX.toFixed(3)},${normY.toFixed(3)}`);
+  }
+}
+
+joystickPad.addEventListener('pointerdown', (e) => {
+  if (frontendMode !== 'control') return;
+  joystickDragging = true;
+  joystickPad.style.cursor = 'grabbing';
+  updateJoystick(e);
+});
+window.addEventListener('pointerup', () => {
+  if (!joystickDragging) return;
+  joystickDragging = false;
+  joystickPad.style.cursor = 'grab';
+  setKnobPosition(0, 0);
+  publishJoystick(0, 0); // spring back to center on release
+});
+window.addEventListener('pointermove', (e) => {
+  if (!joystickDragging) return;
+  updateJoystick(e);
+});
+
+function updateJoystick(e) {
+  const rect = joystickPad.getBoundingClientRect();
+  let dx = (e.clientX - rect.left - PAD_RADIUS) / (PAD_RADIUS - KNOB_RADIUS);
+  let dy = (e.clientY - rect.top - PAD_RADIUS) / (PAD_RADIUS - KNOB_RADIUS);
+  const mag = Math.sqrt(dx * dx + dy * dy);
+  if (mag > 1) { dx /= mag; dy /= mag; }
+  setKnobPosition(dx, dy);
+  publishJoystick(dx, dy);
+}
+
 async function sendCoords(normX, normY) {
-  if (!writer) return;
-  const msg = `${normX.toFixed(3)},${normY.toFixed(3)}\n`;
-  try {
-    await writer.write(new TextEncoder().encode(msg));
-  } catch (err) {
-    console.error('Serial write failed:', err);
+  const msg = `${normX.toFixed(3)},${normY.toFixed(3)}`;
+
+  if (writer) {
+    try {
+      await writer.write(new TextEncoder().encode(msg + '\n'));
+    } catch (err) {
+      console.error('Serial write failed:', err);
+    }
+  }
+
+  if (mqttClient && mqttClient.connected && frontendMode === 'camera') {
+    mqttClient.publish(mqttTopic, msg);
   }
 }
 
